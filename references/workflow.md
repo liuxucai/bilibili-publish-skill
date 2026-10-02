@@ -1,327 +1,136 @@
-# B站文章发布 - 工作流程
+# B站专栏发布 — 完整工作流（2026-10-02 实测）
 
-> 基于 2026-07-09 实际验证经验。浏览器驱动：xb CLI（agent-browser 0.25.3 封装）
+驱动：**隔离 Chrome（CDP 9222）+ playwright-core**。不依赖 xb CLI、不打扰用户浏览器。
 
-## 核心流程
+---
 
+## 0. 依赖文件（全部在技能目录内，自包含）
+
+| 文件 | 作用 |
+|---|---|
+| `scripts/launch-cdp-chrome.js` | 拉起隔离 Chrome（固定 profile `~/.chrome_qclaw_stable`，B站登录态复用） |
+| `scripts/cdplib.js` | CDP 连接 / 编辑器 iframe 定位 / 整页截图（连接语义只在这里解包一次） |
+| `scripts/bili_publish_pw.js` | **主脚本**：填标题→注入正文→段落间插图→草稿校验→发布→验证码→结果校验 |
+| `scripts/bili_probe.js` | 编辑器 DOM 结构探测（改版排障第一步） |
+| `templates/article.txt` | 正文写法示例（一行一段） |
+
+外部依赖仅两项：
+- 系统稳定版 Chrome
+- `playwright-core`（本机在 `~/.workbuddy/binaries/node/workspace/node_modules`，可用 `OPENCLAW_NODE_MODULES` 覆盖）
+
+---
+
+## 1. 拉起浏览器（必须后台常驻）
+
+```bash
+node scripts/launch-cdp-chrome.js "https://member.bilibili.com/platform/upload/text/new-edit" && sleep 7200
 ```
-xb open 发布页
-    ↓
-┌─ URL不含 login ─→ 已登录，继续
-│
-└─ URL含 login ─→ 提示用户手动登录（xb无法过极验）
-                    ↓
-             用户手动完成登录后
-                    ↓
-             xb open 发布页（或通过已打开的窗口导航）
-                    ↓
-     eval JS 填标题（.title-input__inner textarea native setter）
-                    ↓
-     eval JS 填正文（.tiptap.ProseMirror innerHTML，在 iframe 内）
-                    ↓
-     eval JS 点发布按钮（MouseEvent 三件套）
-                    ↓
-     ┌─ 无弹窗 → URL变化 → ✅ 发布成功
-     │
-     └─ 弹「请输入图片中的内容」→ 用户手动输入 → 点确定 → 完成
+
+- **必须在后台跑**（WorkBuddy 里 `run_in_background: true`），否则沙箱会在命令结束时回收 Chrome。
+- profile 固定 `~/.chrome_qclaw_stable`：**B站登录态已存在，正常情况免登录**。
+- 若跳出登录页 → 在弹出的窗口手动登录一次，登录态会存进 profile，之后长期复用。
+
+连通性自检：
+
+```bash
+curl -s http://127.0.0.1:9222/json/version
 ```
 
 ---
 
-## 一、xb CLI 启动
+## 2. 准备内容
 
-### 1.1 xb 路径
-
-```powershell
-# 主路径
-$xb = "C:\Users\菠萝\.qclaw\skills\xbrowser\scripts\xb.cjs"
-
-# OpenClaw 内置路径（备选）
-$xb2 = "F:\qclaw\v0.2.32.610\resources\openclaw\config\skills\xbrowser\scripts\xb.cjs"
+```
+t.txt     第 1 行 = 标题
+b.txt     一行一段，空行忽略（默认 mode=line）
+x.jpg     配图（本地路径）
 ```
 
-### 1.2 检查状态
-
-```powershell
-node $xb status
-```
-
-输出示例：
-```json
-{
-  "ok": true,
-  "data": {
-    "cli": { "version": "agent-browser 0.25.3" },
-    "browsers": { "chrome": { "installed": true, "version": "150.0.7871.46" } },
-    "profiles": { "chrome": { "exists": true, "path": "..." } }
-  }
-}
-```
-
-### 1.3 打开发布页
-
-```powershell
-node $xb run --browser chrome --headed open "https://member.bilibili.com/platform/upload/text/new-edit"
-open 后建议等待页面加载：
-Start-Sleep -Seconds 4
-```
-
-### 1.4 检查登录状态
-
-```powershell
-node $xb run --browser chrome get url
-```
-
-| URL 包含 | 状态 |
-|----------|------|
-| `member.bilibili.com/platform/upload/text/new-edit` | ✅ 已登录 |
-| `passport.bilibili.com/login` | ❌ 未登录 |
+正文示例见 `templates/article.txt`。
 
 ---
 
-## 二、登录处理
+## 3. 发布（一键）
 
-### 2.1 未登录处理
-
-**xb 无法自动化极验验证码**。唯一方案：
-
-```powershell
-Write-Host "⚠️ 请在浏览器窗口中手动完成B站登录"
-Write-Host "1. 切换到浏览器窗口"
-Write-Host "2. 输入账号密码并完成图形验证码"
-Write-Host "3. 登录后继续脚本操作"
-
-# 等待用户手动登录（可以轮询 URL）
-do {
-  Start-Sleep -Seconds 3
-  $url = node $xb run --browser chrome get url 2>$null
-  $json = $url | ConvertFrom-Json
-  $currentUrl = $json.data.result.data.url
-} while ($currentUrl -match "login")
+```bash
+node scripts/bili_publish_pw.js \
+  --title-file t.txt \
+  --body-file b.txt \
+  --image D:/skills/car/14.jpg --image-at 2 \
+  --publish
 ```
 
-### 2.2 登录页结构
+`--image-at 2` = 插到「第 2 段之后」（段落之间）。不带 `--image` 则纯文字发布。
 
-| 元素 | ref | 类型 |
-|------|-----|------|
-| 密码登录 tab | e4 | generic |
-| 短信登录 tab | e5 | generic |
-| 账号输入框 | e36 | textbox |
-| 密码输入框 | e37 | textbox (type=password) |
-| 登录按钮 | e38 | generic (.btn_primary) |
-| 关闭验证弹窗 | e49 | button |
-| 验证码确认 | e48 | button |
+**脚本内部六步**：
+1. `page.goto(PUBLISH_URL)` 开全新编辑器（等价清空）
+2. 标题：`.title-input__inner` 用 `locator.fill()`（新版无需 native setter）
+3. 正文：`ClipboardEvent('paste')` 注入 `text/html`（唯一可靠方式）
+4. 配图：光标定位到第 N 段末尾 → **粘贴图片文件** 触发 `upload_bfs`
+5. 校验：打印块序列 + 抓 `draft/add` 请求体确认已换成图床 URL（`data:image` 应为 0 次）
+6. 发布：点 iframe 内「发布」→ 等成功标志
+
+**退出码**：`0` 成功 / `2` 需要验证码 / `1` 失败。
 
 ---
 
-## 三、填标题
+## 4. 风控验证码（大概率会遇到）
 
-### 3.1 关键发现：标题是 textarea
+点发布后 `POST /x/dynamic/feed/create/opus` 返回 `code:-352`，编辑器 iframe 内弹「请完成验证」。
+脚本会自动把验证码图导出到 `./bili_captcha.png` 并 **以退出码 2 退出**：
 
-```js
-// ✅ 正确：用 native setter + 4事件
-(function(){
-  var iframe = document.querySelector('iframe[src*="read-editor"]');
-  if(!iframe) return 'NO_IFRAME';
-  var doc = iframe.contentDocument || iframe.contentWindow.document;
-  var ta = doc.querySelector('.title-input__inner');
-  if(!ta) return 'NO_TITLE';
-  
-  var nativeSetter = Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype, 'value'
-  ).set;
-  nativeSetter.call(ta, '标题内容');
-  
-  ['input','change','keyup','blur'].forEach(function(evt){
-    ta.dispatchEvent(new Event(evt, {bubbles:true}));
-  });
-  
-  return 'OK:' + ta.value.length;
-})()
+```
+⚠️ 触发风控验证码（create/opus 返回 -352）
+验证码图已导出: .../bili_captcha.png
 ```
 
-### 3.2 ❌ 错误方式
+读出图中字符（放大 5 倍最清楚），然后：
 
-```js
-// innerText 对 textarea 无效
-ta.innerText = '标题';       // ❌ 不生效
-ta.innerHTML = '标题';       // ❌ 不生效
-ta.value = '标题';           // ❌ React 不检测
-// contenteditable 方式也不适用（B站标题是 textarea）
+```bash
+node scripts/bili_publish_pw.js --captcha M5hcD
 ```
 
-### 3.3 验证标题
-
-```powershell
-# snapshot 后查看 e27 的值
-node $xb run --browser chrome snapshot -i
-# 输出中应显示：textbox "请输入标题（建议30字以内）" [ref=e27]: 标题内容
-```
+脚本会：填入 `input.code-input` → 点「确定」→ 立刻再点「发布」→ 等成功标志。
+（本轮可能连弹 2~3 张验证码，重复执行本命令即可。）
 
 ---
 
-## 四、填正文
+## 5. 结果校验
 
-### 4.1 正文编辑器
+成功标志（任一命中）：
+- 弹窗 `vui_dialog` 文本含 **「你的专栏已提交成功」**
+- URL 离开 `upload/text/new-edit`
 
-B站正文使用 **TipTap** 编辑器，选择器：`.tiptap.ProseMirror`
-与标题同一个 iframe（`iframe[src*="read-editor"]`）。
+复核：
 
-### 4.2 用 JS eval 填写
-
-```js
-(function(){
-  var iframe = document.querySelector('iframe[src*="read-editor"]');
-  if(!iframe) return 'NO_IFRAME';
-  var doc = iframe.contentDocument || iframe.contentWindow.document;
-  var editor = doc.querySelector('.tiptap.ProseMirror');
-  if(!editor) return 'NO_EDITOR';
-  editor.innerHTML = '<p>正文第一段</p><p>正文第二段</p>';
-  editor.dispatchEvent(new Event('input', {bubbles:true}));
-  return 'OK:' + editor.innerText.length;
-})()
+```bash
+node scripts/bili_publish_pw.js --status
 ```
 
-### 4.3 ❌ 不能用 xb type / fill
+输出最近一篇的 `dyn_id / rid / title / pub_time` 与公开链接 `https://www.bilibili.com/opus/<dyn_id>`。
 
-xb 的 `type`/`fill` 对 iframe 内的 TipTap 编辑器不响应。
-所有编辑器操作必须用 `eval --base64` 执行 JS。
-
-### 4.4 验证正文
-
-```powershell
-# snapshot 后查看 e35（正文 textarea/div 的内容）
-node $xb run --browser chrome snapshot -i
-```
+> ⚠️ 若点发布后 playwright 报 `vui_dialog--wrapper ... intercepts pointer events`，别慌——这说明**已经发布成功**，那个对话框挡住了按钮，不要再点。
 
 ---
 
-## 五、发布
+## 6. 关键选择器速查（改版先跑 `bili_probe.js`）
 
-### 5.1 发布按钮
-
-发布按钮在同一 iframe 内，snapshot 中为：
-```
-button "发布" [ref=e26]
-```
-
-### 5.2 点击发布（MouseEvent 序列）
-
-```js
-(function(){
-  var iframe = document.querySelector('iframe[src*="read-editor"]');
-  if(!iframe) return 'NO_IFRAME';
-  var doc = iframe.contentDocument || iframe.contentWindow.document;
-  var btns = doc.querySelectorAll('button');
-  var found = null;
-  btns.forEach(function(b){
-    if(b.innerText.trim() === '发布') found = b;
-  });
-  if(!found) return 'NO_BTN';
-  
-  found.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
-  found.dispatchEvent(new MouseEvent('mouseup', {bubbles:true}));
-  found.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-  return 'CLICKED';
-})()
-```
-
-### 5.3 弹窗处理
-
-点发布后可能弹出验证码弹窗（"请输入图片中的内容"）：
-```
-textbox "请输入图片中的内容" [ref=e32]
-link "取消" [ref=e33]
-link "确定" [ref=e34]
-```
-
-**处理方式**：
-```powershell
-# 用户手动在浏览器中完成验证码输入
-# 填完后点"确定"
-Write-Host "⚠️ 请在浏览器中输入验证码图片内容，然后点击「确定」"
-```
-
-### 5.4 验证发布成功
-
-```powershell
-node $xb run --browser chrome get url
-```
-- URL 不再是 `new-edit` → ✅ 发布成功（跳转到文章管理列表）
-- 仍在 `new-edit` → ❌ 发布失败
+| 目标 | 选择器 | 备注 |
+|---|---|---|
+| 编辑器 iframe | `iframe[src*="read-editor"]` | 标题/正文/发布按钮都在里面 |
+| 标题 | `.title-input__inner` | **textarea**，`locator.fill()` 有效 |
+| 正文 | `.tiptap.ProseMirror.eva3-editor` | TipTap，只认 paste 事件 |
+| 配图（已插入） | `.tiptap.ProseMirror img` | src 长期为 `data:` 预览，属正常 |
+| 发布 / 保存草稿 | iframe 内 `button` 文本「发布」「保存为草稿」 | |
+| 验证码弹窗 | `.bili-img-verify` + `input.code-input` | 图片在 `.bili-img-verify img` |
 
 ---
 
-## 六、完整发布脚本
+## 7. 一次真实运行记录（2026-10-02 · 婚车租车）
 
-推荐使用 `scripts/publish.js` 一键执行：
-
-```powershell
-# 确保 xb CLI 路径配置
-# 编辑 scripts/lib.js 中的 XB_PATH 变量
-
-# 执行发布
-node skills/bilibili-publisher/scripts/publish.js
-```
-
----
-
-## 七、调试建议
-
-### 7.1 xb 输出解析
-
-xb 返回 JSON 结构：
-```json
-{
-  "ok": true,
-  "command": "run",
-  "data": {
-    "browser_command": "snapshot -i",
-    "result": {
-      "success": true,
-      "data": { "origin": "...", "refs": {...}, "snapshot": "..." }
-    }
-  }
-}
-```
-
-关键数据路径：
-- snapshot 和 get url：`data.result.data`
-- eval 返回值：`data.result.data.result`
-- snapshot refs：`data.result.data.refs`
-- snapshot 文本：`data.result.data.snapshot`
-
-### 7.2 常用调试命令
-
-```powershell
-$xb = "C:\Users\菠萝\.qclaw\skills\xbrowser\scripts\xb.cjs"
-
-# 截图
-node $xb run --browser chrome screenshot
-
-# 快照
-node $xb run --browser chrome snapshot -i
-
-# 当前 URL
-node $xb run --browser chrome get url
-
-# 页面文本（获取当前 tab 所有可见文字）
-node $xb run --browser chrome get text body
-
-# 执行任意 JS
-# 先用 Base64 编码 JS 文件：
-$js = Get-Content -Raw "script.js"
-$b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($js))
-node $xb run --browser chrome eval --base64 $b64
-```
-
-### 7.3 base64 编码 JS 的最佳方式
-
-```powershell
-# 方式1：用 Node.js 编码
-node -e "console.log(Buffer.from(require('fs').readFileSync('script.js','utf8'),'utf8').toString('base64'))"
-
-# 方式2：用 PowerShell
-$js = Get-Content -Raw "script.js"
-[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($js))
-```
+- 关键词「婚车租车」→ 标题《婚车租车怎么选？车型、数量、预算一篇讲清楚》，正文 20 段 / 967 字
+- 配图：`D:\skills\car\14.jpg`（标签匹配 `婚庆用车` + `婚庆婚车车队`），插在第 2 段之后
+- 图片上传：`upload_bfs` → 图床 `i0.hdslb.com/bfs/new_dyn/0149a5b13cf6a2fc2a15e16f8c75bba4487814960.jpg`
+- 风控：连过 2 轮字符验证码（`M5hcD` → `sQukd`）
+- 结果：**发布成功** 12:05，`dyn_id=1254454729060122661`
+  → https://www.bilibili.com/opus/1254454729060122661

@@ -1,161 +1,114 @@
 ---
 name: bilibili-publisher
-description: B站（bilibili）文章自动发布流程。通过 xb CLI（agent-browser 封装）驱动 Chrome 完成登录、填标题、填正文、发布。触发词：B站发布、bilibili、发布文章到B站、发布专栏到B站。
-
-验证状态：⚠️ 部分验证 - 登录验证码（极验）无法自动化，需用户手动；标题/正文用 JS eval 已验证可行；发布按钮触发后可能弹验证弹窗需用户手动完成。
+description: B站（bilibili）专栏文章自动发布。隔离 Chrome + playwright-core 直连 CDP，完成填标题、粘贴注入正文、段落之间插入配图（本地文件自动上传图床）、发布、风控字符验证码识别、结果校验。触发词：B站发布、bilibili、发布文章到B站、发布专栏到B站。
 ---
 
-# B站文章自动发布 Skill
+# B站专栏发布 Skill v2（2026-10-02 全流程实测跑通）
 
-## 适用场景
+> **v1 的 xb CLI 路线已整体删除**：本机没有 xb（`F:\qclaw`、`C:\Users\菠萝\.qclaw` 均不存在），
+> 相关脚本 `lib.js / publish.js / publish_sz.js / fill_form5.js / click_publish.js / click_confirm.js / quick_publish.js` 已移除。
+> 现行方案自包含、不打扰用户浏览器、登录态复用。
 
-- 自动化将文章发布到B站专栏
-- 复用同一发布流程处理多篇文章
+---
 
-## 环境要求
+## 什么时候用它
 
-| 项目     | 要求                                                         |
-| -------- | ------------------------------------------------------------ |
-| 浏览器   | 正式版 Chrome                                                |
-| 控制工具 | xb CLI                                                       |
-| 路径     | `F:\qclaw\v0.2.23.532\resources\openclaw\config\skills\xbrowser\scripts\xb.cjs` |
-| 运行环境 | Windows PowerShell，不支持 `&&` 链式语法                     |
-| 脚本语言 | Node.js（封装所有 xb 调用，规避 PowerShell 中文乱码）        |
+把一篇文章（可带一张本地配图）发布到 B站专栏：
+标题 + 正文（一行一段）+ 配图插入到指定「段落之间」+ 提交发布 + 过风控验证码 + 回读文章链接。
 
-## xb CLI 路径
+---
 
-xb CLI 有两条可用路径（内容相同）：
-
-| 位置 | 路径 |
-|------|------|
-| 工作区 skill 副本 | `C:\Users\菠萝\.qclaw\skills\xbrowser\scripts\xb.cjs` |
-| OpenClaw 内置 | `F:\qclaw\v0.2.32.610\resources\openclaw\config\skills\xbrowser\scripts\xb.cjs` |
-
-**推荐使用工作区路径**（短一些）。
-
-## xb 核心语法
-
-| 操作 | 命令 |
-|------|------|
-| 打开页面 | `node <xb.cjs> run --browser chrome open <URL>` |
-| 快照 | `node <xb.cjs> run --browser chrome snapshot -i` |
-| 点击 (ref) | `node <xb.cjs> run --browser chrome click @eXX` |
-| 填字段 | `node <xb.cjs> run --browser chrome fill @eXX "text"` |
-| 逐字符输入 | `node <xb.cjs> run --browser chrome type @eXX "text"` |
-| eval JS | `node <xb.cjs> run --browser chrome eval --base64 <base64>` |
-| 获取 URL | `node <xb.cjs> run --browser chrome get url` |
-| 截图 | `node <xb.cjs> run --browser chrome screenshot` |
-| 按键 | `node <xb.cjs> run --browser chrome press <key>` |
-| 关闭标签 | `node <xb.cjs> run --browser chrome close` |
-| 状态检查 | `node <xb.cjs> status` |
-| 清理会话 | `node <xb.cjs> cleanup` |
-
-> **注意**：xb `fill` 和 `click` 只接受 `@ref` 编号（来自 snapshot），不接受 CSS 选择器。
-> 复杂操作必须用 `eval --base64` 执行 JS。
-
-## 核心原则
-
-### ⚠️ 登录验证码（极验 geetest）无法自动化
-- 每次密码登录后必弹「请在下图依次点击」文字点选验证码
-- canvas 宽高为 0，不可截图分析，点击坐标无法计算
-- **唯一方案**：填好账号密码后，让用户手动点登录 → 过验证码
-- 或：用户先手动登录一次，xb 的 profile 会保存登录态
-
-### ⚠️ 浏览器原则：绝不关闭现有浏览器进程
-- xb 使用独立 profile（`~/.qclaw/tools/xbrowser/profiles/chrome`），不碰用户浏览器
-- 禁止 `taskkill /F /IM chrome.exe`
-
-### ⚠️ 标题编辑器是 textarea（非 contenteditable）
-- B站标题元素 `.title-input__inner` **是 textarea**（不是 span contenteditable）
-- 设置方法：用 `HTMLTextAreaElement.prototype.value` native setter + 4事件
-- `innerText`/`innerHTML` 对 textarea 不生效
-
-### ⚠️ 发布按钮可能弹验证码弹窗
-- 点"发布"按钮后，可能弹出「请输入图片中的内容」验证弹窗
-- 弹窗有 textbox（输入验证码）+「取消」+「确定」按钮
-- 需要用户手动填写验证码
-
-## 核心流程
-
-```
-1. xb open 发布页
-2. 检查是否已登录（URL 是否含 login）
-   - 已登录 → 继续
-   - 未登录 → 提示用户手动登录（xb 无法处理极验）
-3. 填标题（JS eval：native setter + 4事件）
-4. 填正文（JS eval：.tiptap.ProseMirror innerHTML）
-5. 发布（JS eval：MouseEvent 序列点击发布按钮）
-6. 处理验证码弹窗（如有，用户手动）
-7. 验证成功（URL 变化）
-```
-
-## 关键难点（2026-07-09 更新）
-
-### 1. 标题是 textarea，要用 native setter
-```js
-// ✅ 正确
-var ta = doc.querySelector('.title-input__inner');
-var nativeSetter = Object.getOwnPropertyDescriptor(
-  HTMLTextAreaElement.prototype, 'value'
-).set;
-nativeSetter.call(ta, '标题');
-['input','change','keyup','blur'].forEach(function(evt){
-  ta.dispatchEvent(new Event(evt, {bubbles:true}));
-});
-
-// ❌ 错误：innerText / innerHTML 对 textarea 无效
-ta.innerText = '标题';  // 不生效
-```
-
-### 2. 标题和正文都在 iframe 内
-- iframe 选择器：`iframe[src*="read-editor"]`
-- 标题：`.title-input__inner`（textarea）
-- 正文：`.tiptap.ProseMirror`（TipTap 编辑器，div contenteditable）
-- 发布按钮也是 iframe 内的 `button`（innerText="发布"）
-
-### 3. PowerShell 2>&1 问题
-- xb 输出前会打印 `"环境变量注入"` 等非 JSON 前缀行
-- 必须用 `2>$null` 抑制错误流，或用 JSON parse 取最后一个 JSON
-- 不能正确使用 `2>&1` 等重定向语法
-
-### 4. eval --base64 编码
-- base64 解码必须产生**有效 UTF-8**，否则报错
-- 中文需先确保 JS 文件 UTF-8 编码，再 base64
-- 用独立 JS 文件 + `fs.readFileSync` 编码是最稳的方式
-
-## 使用方法
-
-### 快速发布（已登录状态）
-
-```powershell
-# 定义 xb 路径快捷变量
-$xb = "C:\Users\菠萝\.qclaw\skills\xbrowser\scripts\xb.cjs"
-
-# 1. 打开发布页（如未登录会自动跳到登录页）
-node $xb run --browser chrome open "https://member.bilibili.com/platform/upload/text/new-edit"
-
-# 2. 检查是否已登录
-node $xb run --browser chrome get url
-
-# 3. 填标题+正文（推荐用 fill_form5.js 或独立 JS 文件编码）
-node scripts/bilibili-publisher/scripts/fill_form5.js
-
-# 4. 获取最新 snapshot 查看发布按钮
-node $xb run --browser chrome snapshot -i
-
-# 5. 用 eval --base64 执行点击发布（推荐脚本化）
-```
-
-推荐使用 `scripts/publish.js` 一键执行完整流程。
-
-## 配套资源
+## 依赖文件（都在本技能目录）
 
 | 文件 | 说明 |
-|------|------|
-| [SKILL.md](SKILL.md) | 本文件 |
-| [references/workflow.md](references/workflow.md) | 完整发布流程 |
-| [references/troubleshooting.md](references/troubleshooting.md) | 问题排查 |
-| [scripts/publish.js](scripts/publish.js) | 一键发布脚本（推荐） |
-| [scripts/lib.js](scripts/lib.js) | xb 封装库 |
-| [scripts/fill_form5.js](scripts/fill_form5.js) | 表单填写 JS（标题+正文） |
-| [templates/article.txt](templates/article.txt) | 文章模板 |
+|---|---|
+| `scripts/launch-cdp-chrome.js` | 拉起隔离 Chrome（profile `~/.chrome_qclaw_stable`，免登录复用） |
+| `scripts/cdplib.js` | CDP 连接 / 编辑器 iframe 定位 / 整页截图 |
+| `scripts/bili_publish_pw.js` | 主脚本：一键发布 / 补验证码 / 查状态 / 探测 |
+| `scripts/bili_probe.js` | 编辑器 DOM 结构探测（排障首选） |
+| `references/workflow.md` | 完整工作流 + 选择器速查表 |
+| `references/troubleshooting.md` | **P1~P15 全部问题与解决方法**（踩坑必读） |
+| `templates/article.txt` | 正文写法示例 |
+
+外部依赖：系统稳定版 Chrome + `playwright-core`（本机路径见 cdplib.js，可用 `OPENCLAW_NODE_MODULES` 覆盖）。
+
+---
+
+## 三步跑完
+
+```bash
+# ① 拉起隔离 Chrome（必须后台常驻：run_in_background + sleep 保活）
+node scripts/launch-cdp-chrome.js && sleep 7200
+
+# ② 发布（t.txt 首行=标题；b.txt 一行一段；--image-at 2 = 插到第2段之后）
+node scripts/bili_publish_pw.js --title-file t.txt --body-file b.txt \
+     --image D:/skills/car/14.jpg --image-at 2 --publish
+
+# ③ 若提示「触发风控验证码」（退出码 2）→ 打开导出的 bili_captcha.png 读字符
+node scripts/bili_publish_pw.js --captcha M5hcD
+```
+
+查结果：`node scripts/bili_publish_pw.js --status`
+
+---
+
+## 必须记住的 5 条铁律
+
+1. **正文只能靠模拟 paste 事件注入**（`ClipboardEvent('paste')` + `DataTransfer.setData('text/html')`）。
+   直接改 `.tiptap.ProseMirror` 的 innerHTML 会与编辑器状态脱钩，点击后被回写清空。
+
+2. **配图只能靠「粘贴图片文件」**（`DataTransfer.items.add(File)` + paste），
+   **不要点工具栏 `eva3-toolbar-image`**——那条路插的是本地 base64 节点，不触发 `upload_bfs`。
+
+3. **DOM 里 `img.src` 一直是 `data:image/jpeg;base64` 是正常的**，别等它变 http。
+   想知道有没有真上传：抓 `POST /x/dynamic/feed/article/draft/add` 的请求体，
+   里面应是 `{"para_type":2,"pic":{"pics":[{"url":"http://i0.hdslb.com/bfs/new_dyn/xxx.jpg"}]}}`。
+
+4. **发布会被风控拦**：`create/opus` 返回 `code:-352` → 编辑器 iframe 内 `.bili-img-verify` 字符验证码。
+   验证码图直接在 `.bili-img-verify img.src`（base64），填 `input.code-input` → 点「确定」→ **1.5 秒内再点一次「发布」**。
+   成功标志：弹窗 **「你的专栏已提交成功」**。可能连弹 2~3 轮，属正常。
+
+5. **截图有坑**：`page.screenshot()` 和 CDP `clip+scale` 在本页会挂起；要用画面就调 `cdplib.fullScreenshot()`（不带 clip 的整页截图）。
+
+---
+
+## 常见问题速查（详见 references/troubleshooting.md）
+
+| 症状 | 去哪看 |
+|---|---|
+| xb CLI 报 MODULE_NOT_FOUND / F:\qclaw 不存在 | P1 |
+| Chrome 起来了但立刻连不上 | P2 |
+| 页面不渲染 / 弹窗空壳 / 截图黑屏 | P3 |
+| 正文写进去一交互就消失 | P4 |
+| 插图后 src 永远 base64、没发上传请求 | P5 / P7 |
+| 等了很久以为上传超时 | P7 |
+| 重载页面想找回草稿结果空白 | P9 |
+| 发布返回 -352、弹「请完成验证」 | P10 |
+| 截图超时 / clip 截图挂死 | P11 |
+| 抓到的「验证码图」其实是文章配图 | P12 |
+| 不确定到底发布成功没有 | P13 |
+| 段落被合并/多出空段落 | P14 |
+| 发布前/失败时的自检命令清单 | P15 |
+| 测试草稿太多、删除按钮点不动 | P16 |
+
+**调试建议**：用 `--no-save` 干跑（只填充+打印块结构，不落草稿）；因为 eva3 编辑器会自动保存，
+日常调试难免在草稿箱留痕，测完记得去 `投稿 → 图文管理 → 草稿` 清理（方法见 P16）。
+
+---
+
+## 结果校验口径（多路确认）
+
+- 弹窗 `vui_dialog` 含 **「你的专栏已提交成功」**
+- URL 离开 `upload/text/new-edit`
+- `--status` 查 `opus/creationlist` 拿 `dyn_id` → 公开链接 `https://www.bilibili.com/opus/<dyn_id>`
+- 打开公开页确认 `article img` 的 src 是 `i0.hdslb.com/bfs/new_dyn/...`
+
+> 若点发布后 playwright 报 `vui_dialog--wrapper ... intercepts pointer events`，
+> 说明**已经发布成功**（成功弹窗挡住了按钮），不要再点第二次。
+
+---
+
+## 最近一次成功记录
+
+2026-10-02《婚车租车怎么选？车型、数量、预算一篇讲清楚》
+→ https://www.bilibili.com/opus/1254454729060122661 （dyn_id 1254454729060122661，12:05 发布，配图插在第 2 段之后）
