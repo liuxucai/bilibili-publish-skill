@@ -7,15 +7,14 @@
  *   - 解包只在这里做一次，业务侧拿到的就是最终值（避免 NO_VAL 假错误）
  *
  * 环境变量：
- *   OPENCLAW_NODE_MODULES  playwright-core 所在 node_modules（默认取本机 managed 路径）
+ *   OPENCLAW_NODE_MODULES  playwright-core 所在 node_modules（不设则运行时自动探测）
  *   BILI_CDP_PORT          CDP 端口，默认 9222
  */
 
 const path = require('path');
 const fs = require('fs');
 
-const NODE_MODULES = process.env.OPENCLAW_NODE_MODULES
-  || path.join(process.env.USERPROFILE || process.env.HOME || '', '.workbuddy', 'binaries', 'node', 'workspace', 'node_modules');
+const NODE_MODULES = process.env.OPENCLAW_NODE_MODULES || null;
 
 const CDP_PORT = process.env.BILI_CDP_PORT || '9222';
 const CDP_URL = 'http://127.0.0.1:' + CDP_PORT;
@@ -27,11 +26,17 @@ const EDITOR_FRAME_KEY = 'read-editor';   // 编辑器 iframe：member.bilibili.
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
 function loadPlaywright() {
-  var p = path.join(NODE_MODULES, 'playwright-core');
-  if (!fs.existsSync(p)) {
-    throw new Error('未找到 playwright-core：' + p + '\n请设置 OPENCLAW_NODE_MODULES 指向含 playwright-core 的 node_modules');
+  // 首选：公共解析器（不写死用户名 / 盘符 / 版本号）
+  try {
+    return require(path.resolve(__dirname, '..', '..', 'isolated-browser', 'scripts', 'pathkit.js')).resolvePlaywright();
+  } catch (e) { /* 回退本地探测 */ }
+  var home = process.env.USERPROFILE || process.env.HOME || '';
+  var cands = [NODE_MODULES, home && path.join(home, '.workbuddy', 'binaries', 'node', 'workspace', 'node_modules')].filter(Boolean);
+  for (var i = 0; i < cands.length; i++) {
+    var p = path.join(cands[i], 'playwright-core');
+    if (fs.existsSync(p)) return require(p);
   }
-  return require(p);
+  throw new Error('未找到 playwright-core。请设置 OPENCLAW_NODE_MODULES 指向含 playwright-core 的 node_modules');
 }
 
 /** 连接隔离 Chrome，返回 { browser, ctx, page } */

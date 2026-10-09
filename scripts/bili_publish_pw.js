@@ -10,7 +10,7 @@
  *
  *   # 2) 发布 + 在第 2 段之后插图
  *   node scripts/bili_publish_pw.js --title-file t.txt --body-file b.txt \
- *        --image D:/skills/car/14.jpg --image-at 2 --publish
+ *        --image <素材目录>/14.jpg --image-at 2 --publish
  *
  *   # 3) 发布被风控拦下 → 脚本导出验证码图并退出(码2)，人工/Agent 读出后补填
  *   node scripts/bili_publish_pw.js --captcha M5hcD

@@ -3,7 +3,7 @@
  * launch-cdp-chrome.js — 拉起「隔离 Chrome + CDP 9222」用于 B站发布
  *
  * 为什么需要它：
- *   本技能早期走 xb CLI（agent-browser 封装），但本机没有 xb（F:\qclaw 不存在）。
+ *   本技能早期走 xb CLI（agent-browser 封装），但 xb 不是通用依赖、本机不保证有。
  *   现改为自己拉一个与用户浏览器完全隔离的 Chrome，再用 playwright-core 直连 CDP。
  *
  * 关键点：

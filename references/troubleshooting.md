@@ -11,7 +11,7 @@
 
 **症状**：`node .../xb.cjs` 报 `MODULE_NOT_FOUND` / `ENOENT`；或 `F:\qclaw` 目录根本不存在。
 
-**原因**：技能早期依赖 xb CLI（agent-browser 封装），但那套东西（`C:\Users\菠萝\.qclaw\...`、`F:\qclaw\...`）属于**另一台机器/另一个用户**的环境，本机没有。
+**原因**：技能早期依赖 xb CLI（agent-browser 封装），但那套东西（`C:\Users\<用户名>\.qclaw\...`、`<盘符>:\qclaw\...`）属于**原作者机器**的环境，本机不一定有。
 
 **解决**：整体切换到「自己拉隔离 Chrome + playwright-core 直连 CDP」。
 

@@ -16,7 +16,7 @@
 
 外部依赖仅两项：
 - 系统稳定版 Chrome
-- `playwright-core`（本机在 `~/.workbuddy/binaries/node/workspace/node_modules`，可用 `OPENCLAW_NODE_MODULES` 覆盖）
+- `playwright-core`（由 `isolated-browser/scripts/pathkit.js` 运行时自动探测；可用 `OPENCLAW_NODE_MODULES` 覆盖）
 
 ---
 
@@ -56,7 +56,7 @@ x.jpg     配图（本地路径）
 node scripts/bili_publish_pw.js \
   --title-file t.txt \
   --body-file b.txt \
-  --image D:/skills/car/14.jpg --image-at 2 \
+  --image <素材目录>/14.jpg --image-at 2 \
   --publish
 ```
 
@@ -129,7 +129,7 @@ node scripts/bili_publish_pw.js --status
 ## 7. 一次真实运行记录（2026-10-02 · 婚车租车）
 
 - 关键词「婚车租车」→ 标题《婚车租车怎么选？车型、数量、预算一篇讲清楚》，正文 20 段 / 967 字
-- 配图：`D:\skills\car\14.jpg`（标签匹配 `婚庆用车` + `婚庆婚车车队`），插在第 2 段之后
+- 配图：`<素材目录>\14.jpg`（标签匹配 `婚庆用车` + `婚庆婚车车队`），插在第 2 段之后
 - 图片上传：`upload_bfs` → 图床 `i0.hdslb.com/bfs/new_dyn/0149a5b13cf6a2fc2a15e16f8c75bba4487814960.jpg`
 - 风控：连过 2 轮字符验证码（`M5hcD` → `sQukd`）
 - 结果：**发布成功** 12:05，`dyn_id=1254454729060122661`

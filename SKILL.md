@@ -5,7 +5,7 @@ description: B站（bilibili）专栏文章自动发布。隔离 Chrome + playwr
 
 # B站专栏发布 Skill v2（2026-10-02 全流程实测跑通）
 
-> **v1 的 xb CLI 路线已整体删除**：本机没有 xb（`F:\qclaw`、`C:\Users\菠萝\.qclaw` 均不存在），
+> **v1 的 xb CLI 路线已整体删除**：xb（`<盘符>:\qclaw\...`、`C:\Users\<用户名>\.qclaw\...`）不是通用依赖，本机不保证存在，
 > 相关脚本 `lib.js / publish.js / publish_sz.js / fill_form5.js / click_publish.js / click_confirm.js / quick_publish.js` 已移除。
 > 现行方案自包含、不打扰用户浏览器、登录态复用。
 
@@ -30,7 +30,7 @@ description: B站（bilibili）专栏文章自动发布。隔离 Chrome + playwr
 | `references/troubleshooting.md` | **P1~P15 全部问题与解决方法**（踩坑必读） |
 | `templates/article.txt` | 正文写法示例 |
 
-外部依赖：系统稳定版 Chrome + `playwright-core`（本机路径见 cdplib.js，可用 `OPENCLAW_NODE_MODULES` 覆盖）。
+外部依赖：系统稳定版 Chrome + `playwright-core`（由 `isolated-browser/scripts/pathkit.js` 运行时自动探测，可用 `OPENCLAW_NODE_MODULES` 覆盖）。
 
 ---
 
@@ -42,7 +42,7 @@ node scripts/launch-cdp-chrome.js && sleep 7200
 
 # ② 发布（t.txt 首行=标题；b.txt 一行一段；--image-at 2 = 插到第2段之后）
 node scripts/bili_publish_pw.js --title-file t.txt --body-file b.txt \
-     --image D:/skills/car/14.jpg --image-at 2 --publish
+     --image <素材目录>/14.jpg --image-at 2 --publish
 
 # ③ 若提示「触发风控验证码」（退出码 2）→ 打开导出的 bili_captcha.png 读字符
 node scripts/bili_publish_pw.js --captcha M5hcD
