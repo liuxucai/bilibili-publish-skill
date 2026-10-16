@@ -3,3 +3,8 @@ bili_captcha.png
 scripts/bili_*.png
 *.log
 node_modules/
+
+# 工作区（运行产物统一落 .workspace/）
+.workspace/
+**/.workspace/
+*.tmp
