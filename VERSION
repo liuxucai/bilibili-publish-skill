@@ -1,1 +1,12 @@
-2.0.0
+2.4.0
+2026-10-13 封面脚本化（--cover）+ 判据修订：
+- bili_publish_pw.js 合入 P19 封面 3 步：--cover 打开「自定义封面」vui_switch（先读 checked/aria-checked
+  防重复开关）→ 点「添加封面」→ input[type=file][accept*=.png] setInputFiles。
+- 【P19 修订】上传后会弹「选择封面的截取位置」裁剪弹窗（早前"无裁剪"结论有误，系空白稿测试），
+  必须点弹窗「确定」；setCover 已内置轮询+双兜底点击。
+- 【判据修订】封面生效权威判据 = creationlist API 的 cover.url（图床图）；
+  公开页 __INITIAL_STATE__ share_info.pic 有延迟（刚发布仍 app_logo，勿据此下结论）。
+  新增 --check-cover <dyn_id> 复核命令（先 API 后公开页兜底）。
+- 实测：《陪表弟订婚车跑了两周…》12:10 → opus/1258537975963189301，封面 9.jpg 裁剪 622x350
+  落 bfs/new_dyn 图床，验证码 6Tdp7 一次通过；vui_dialog 拦截=已成功（P18 再次印证）。
+- 新增 content/t_engagement_car.txt + b_engagement_car.txt 文章素材归档。

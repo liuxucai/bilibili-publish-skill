@@ -44,7 +44,7 @@ async function connect() {
   var chromium = loadPlaywright().chromium;
   var browser = await chromium.connectOverCDP(CDP_URL);
   var ctx = browser.contexts()[0];
-  if (!ctx) throw new Error('CDP 已连上但没有 context，请确认隔离 Chrome 已启动（launch-cdp-chrome.js）');
+  if (!ctx) throw new Error('CDP 已连上但没有 context，请确认隔离 Chrome 已启动（../isolated-browser/scripts/launch.js）');
   var page = ctx.pages().find(function (p) { return p.url().indexOf('member.bilibili.com') >= 0; }) || ctx.pages()[0];
   if (!page) throw new Error('隔离 Chrome 里没有可用标签页');
   return { browser: browser, ctx: ctx, page: page };

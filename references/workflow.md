@@ -4,11 +4,11 @@
 
 ---
 
-## 0. 依赖文件（全部在技能目录内，自包含）
+## 0. 依赖文件
 
 | 文件 | 作用 |
 |---|---|
-| `scripts/launch-cdp-chrome.js` | 拉起隔离 Chrome（固定 profile `~/.chrome_qclaw_stable`，B站登录态复用） |
+| `../isolated-browser/scripts/launch.js` | 拉起隔离 Chrome（**共享基座**，固定 profile `~/.chrome_qclaw_stable`，B站登录态复用） |
 | `scripts/cdplib.js` | CDP 连接 / 编辑器 iframe 定位 / 整页截图（连接语义只在这里解包一次） |
 | `scripts/bili_publish_pw.js` | **主脚本**：填标题→注入正文→段落间插图→草稿校验→发布→验证码→结果校验 |
 | `scripts/bili_probe.js` | 编辑器 DOM 结构探测（改版排障第一步） |
@@ -23,7 +23,7 @@
 ## 1. 拉起浏览器（必须后台常驻）
 
 ```bash
-node scripts/launch-cdp-chrome.js "https://member.bilibili.com/platform/upload/text/new-edit" && sleep 7200
+node ../isolated-browser/scripts/launch.js "https://member.bilibili.com/platform/upload/text/new-edit" && sleep 7200
 ```
 
 - **必须在后台跑**（WorkBuddy 里 `run_in_background: true`），否则沙箱会在命令结束时回收 Chrome。
@@ -53,20 +53,23 @@ x.jpg     配图（本地路径）
 ## 3. 发布（一键）
 
 ```bash
-node scripts/bili_publish_pw.js \
-  --title-file t.txt \
-  --body-file b.txt \
-  --image <素材目录>/14.jpg --image-at 2 \
-  --publish
+# 默认：配图 3 张，按标签从素材库自动挑，自动算锚点（spread 均分）
+node scripts/bili_publish_pw.js --title-file t.txt --body-file b.txt \
+  --keyword "婚车租车" --tags "婚庆用车,婚庆婚车车队" --publish
+
+# 手动指定多张（可重复 --image），锚点自动均分；--image-layout group 可改为连续插在同一处
+node scripts/bili_publish_pw.js --title-file t.txt --body-file b.txt \
+  --image <素材目录>/14.jpg --image <素材目录>/11.jpg --image <素材目录>/9.jpg --publish
 ```
 
-`--image-at 2` = 插到「第 2 段之后」（段落之间）。不带 `--image` 则纯文字发布。
+- 多张时**倒序插入**（避免块索引漂移，见 troubleshooting P17）。
+- 不带任何 `--image` 且未给 `--tags` → 自动挑选仍会跑（关键词取标题）；`--no-image` 则纯文字发布。
 
 **脚本内部六步**：
 1. `page.goto(PUBLISH_URL)` 开全新编辑器（等价清空）
 2. 标题：`.title-input__inner` 用 `locator.fill()`（新版无需 native setter）
 3. 正文：`ClipboardEvent('paste')` 注入 `text/html`（唯一可靠方式）
-4. 配图：光标定位到第 N 段末尾 → **粘贴图片文件** 触发 `upload_bfs`
+4. 配图：按锚点定位到第 N 段末尾 → **粘贴图片文件** 触发 `upload_bfs`（多张时**倒序**逐张插）
 5. 校验：打印块序列 + 抓 `draft/add` 请求体确认已换成图床 URL（`data:image` 应为 0 次）
 6. 发布：点 iframe 内「发布」→ 等成功标志
 

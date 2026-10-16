@@ -16,7 +16,7 @@
 **解决**：整体切换到「自己拉隔离 Chrome + playwright-core 直连 CDP」。
 
 ```bash
-node scripts/launch-cdp-chrome.js && sleep 7200     # 必须后台常驻
+node ../isolated-browser/scripts/launch.js && sleep 7200     # 必须后台常驻
 node scripts/bili_publish_pw.js --probe             # 验证能连上
 ```
 
@@ -38,7 +38,7 @@ node scripts/bili_publish_pw.js --probe             # 验证能连上
 
 **症状**：`document.visibilityState === 'hidden'`，懒加载弹窗只挂空壳、按钮恒 disabled、截图全黑。
 
-**解决**：`launch-cdp-chrome.js` 已内置四条启动参数，**不要删**：
+**解决**：`isolated-browser/scripts/launch.js` 已内置四条启动参数，**不要删**（本 skill 原自带的 `launch-cdp-chrome.js` 已删除，改用该共享脚本）：
 
 ```
 --disable-backgrounding-occluded-windows
@@ -245,3 +245,101 @@ await page.getByText('确定', { exact: true }).last().click();      // 确认�
 
 **排查地址**：`https://member.bilibili.com/opus/management/drafts`（页面文本里每个草稿都带「最后修改时间」，用它区分）。
 **踩坑提醒**：删除前一定核对时间戳——同名草稿可能同时存在（已发布的文章也会在图文列表里显示同名标题，别删错）。
+
+---
+
+## P17. 多图（3 张）改造（2026-10-12）
+
+**新增能力**：`bili_publish_pw.js` 的 `--image` 支持**重复传参**（`argAll('image')` 收集为数组），
+并新增 `--keyword` / `--tags` / `--image-top` / `--image-layout`（`spread` 均分 / `group` 连续）/ `--no-image`。
+不给 `--image` 时由共享工具 `../../isolated-browser/scripts/post_images.js` 的 `planImages()`
+按「标签 → 素材库」自动挑 3 张并算好插入锚点。
+
+### 问题 1：多图按顺序插会串位
+- **现象**：按 slot 从小到大依次插图时，第 2、3 张落到错误段落。
+- **原因**：每插一张图都会在编辑器里**新增一个 block**，后面尚未处理的锚点索引整体后移。
+- **解决**：**倒序插入**（slot 大的先插）——插前面的图不会影响后面锚点的索引。
+  实现：`order = images.sort((a,b) => b.at - a.at)`。
+
+### 问题 2：多图时"上传是否成功"的判据要按累计数看
+- **现象**：只看第 1 张的 src 会误判。
+- **解决**：以「**图床 URL 数 = 图片数**」为准。P7 的草稿 body 校验同样适用：
+  发布前抓 `draft/add` 请求体，确认每张 `pic.pics[].url` 都是 `hdslb.com`，且 `data:image` 出现 **0** 次。
+
+### 实测结果（2026-10-12）
+3 张图分别落在第 **3 / 7 / 10** 段之后，块结构完整；
+草稿序列化校验：**图床 URL = true / base64 残留 = 0**。
+
+### 已证伪（勿再试）
+| 做法 | 为什么不行 |
+|---|---|
+| 正序逐张插图 | 锚点索引漂移，第 2 张起位置错 |
+| 用一次 paste 塞多个 File 实现多图 | 编辑器按「一次粘贴一个块」处理，多文件不可控 |
+| 用 `eva3-toolbar-image`（工具栏图片按钮）插图 | 早于 P5 已证伪：插的是本地 base64 节点，不触发 `upload_bfs` |
+
+---
+
+## P18. `--captcha` 提交后报「vui_dialog 拦截点击」= 大概率已发布成功（2026-10-12 实测）
+
+**现象**：`--captcha dVGkr` 提示「验证码已提交」后，脚本回头点「发布」按钮时报：
+
+```
+ERR locator.click: Timeout 8000ms exceeded.
+  - <button ...>发布</button>
+  - <div class="vui_dialog--wrapper">…</div> from <div class="vui_dialog--root">…</div>
+    subtree intercepts pointer events
+```
+
+退出码 1，**看起来像失败**。
+
+**根因**：验证码通过后发布实际上已经完成，**成功弹窗挡住了发布按钮**——与「结果校验口径」一节
+"点发布被 vui_dialog 拦截 = 已成功" 是同一个现象，只是这次发生在验证码补填流程里，脚本把它当成了失败。
+
+**✅ 解决**：遇到该报错**先查状态、绝不要再补一次发布**（会重复发稿）：
+
+```bash
+node scripts/bili_publish_pw.js --status
+```
+
+能查到刚发的标题 + `dyn_id` 即为成功。
+
+**实测**：2026-10-12 18:27，《婚车租车怎么选不踩坑？…》验证码 `dVGkr` 一次通过 → 报上述错 →
+`--status` 查到 `dyn_id 1258264021493088277`；公开页 3 张配图均为 `i2.hdslb.com/bfs/new_dyn/...` 外链。
+
+**验证码识别经验**：导出的 `bili_captcha.png` 用视觉模型/人工直接读字符即可，实测一次通过；
+文件是运行产物，已加 `.gitignore` 不入库。
+
+---
+
+## P19. 专栏封面：「自定义封面」是发布设置里的开关，**已发布后无法网页补设**（2026-10-13 二次实测修订）
+
+**机制**：编辑器（含 iframe `member.bilibili.com/york/read-editor`）的「发布设置 → 自定义封面」
+是一个 **`vui_switch` 开关，默认关闭** —— 不开开关时封面自动取正文开头文字，分享卡 `pic`
+兜底为 `static.hdslb.com/mobile/img/app_logo.png`（分享出去很丑）。
+
+**✅ 正确设置姿势（发布时做，已固化进 `bili_publish_pw.js --cover`）**：
+1. 打开开关：`iframe.locator('.form-item:has(.form-item-label:text-is("自定义封面")) .vui_switch--switch').click()`
+   （先读 `input[type=checkbox].checked` / `aria-checked`，已开不重复点）
+2. 点新出现的「**添加封面**」→ iframe 出现 `input[type=file]`（accept `.jpg,.jpeg,.png`，**单选**）
+3. `setInputFiles` 上传（建议 ≥600×336）
+4. ⚠️ **会弹「选择封面的截取位置」裁剪弹窗**（早前"无裁剪"结论有误——此前是在空白新稿上测的），
+   必须点弹窗内「确定」，否则封面停在弹窗里不生效
+5. 正常点「发布」
+
+**⚠️ 已发布的图文（opus）无法补设封面**（三路全堵，勿再试）：
+- opus 公开页右上角「···」（`.opus-more__btn`）菜单**只有「可见范围 / 删除」**，没有「编辑」；
+- 图文管理侧栏的「图文管理」子菜单默认**折叠不可见**（`bcc-nav-slider-sub-menu__group` vis=false）；
+- `upload/text/new-edit?opus_id=<id>` 打开的是**空白新稿**（`opus_id` 参数无效）——
+  在空白稿上开开关、传封面、点「发布」会被**静默拦截**（标题必填）：不弹窗、不报错、URL 不变。
+  （好在空稿不会被保存，无残留。）
+
+**封面判据（2026-10-13 修订，重要）**：
+- ✅ **权威判据**：创作中心 `opus/creationlist` API 返回条目的 **`cover.url`**
+  （图床 `i0.hdslb.com/bfs/new_dyn/...` = 生效；空 = 未生效）。
+- ⚠️ **公开页 `__INITIAL_STATE__` 的 `share_info.pic` 有延迟**：刚发布时仍兜底 `app_logo.png`，
+  发布后几分钟内据此判"未生效"会**误报**（实测：API 已是真封面，公开页 pic 仍 app_logo）。
+- 复核命令：`node scripts/bili_publish_pw.js --check-cover <dyn_id>`（先查 API，公开页仅兜底）。
+
+**实测（2026-10-13 12:10）**：《陪表弟订婚车跑了两周…》
+→ https://www.bilibili.com/opus/1258537975963189301 （dyn_id 1258537975963189301），
+封面 9.jpg 裁剪为 622×350 落图床 `bfs/new_dyn/fd9b00ecb...jpg`，验证码 `6Tdp7` 一次通过。

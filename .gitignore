@@ -1,0 +1,5 @@
+# B站运行产物（验证码图 / 截图）不入库
+bili_captcha.png
+scripts/bili_*.png
+*.log
+node_modules/

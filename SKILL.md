@@ -13,7 +13,7 @@ description: B站（bilibili）专栏文章自动发布。隔离 Chrome + playwr
 
 ## 什么时候用它
 
-把一篇文章（可带一张本地配图）发布到 B站专栏：
+把一篇文章（默认带 3 张本地配图，可自动挑选）发布到 B站专栏：
 标题 + 正文（一行一段）+ 配图插入到指定「段落之间」+ 提交发布 + 过风控验证码 + 回读文章链接。
 
 ---
@@ -22,7 +22,7 @@ description: B站（bilibili）专栏文章自动发布。隔离 Chrome + playwr
 
 | 文件 | 说明 |
 |---|---|
-| `scripts/launch-cdp-chrome.js` | 拉起隔离 Chrome（profile `~/.chrome_qclaw_stable`，免登录复用） |
+| `../isolated-browser/scripts/launch.js` | 拉起隔离 Chrome（**公共基座**，profile `~/.chrome_qclaw_stable`，免登录复用）。本 skill 原自带的 `launch-cdp-chrome.js` 已删除，统一用共享脚本 |
 | `scripts/cdplib.js` | CDP 连接 / 编辑器 iframe 定位 / 整页截图 |
 | `scripts/bili_publish_pw.js` | 主脚本：一键发布 / 补验证码 / 查状态 / 探测 |
 | `scripts/bili_probe.js` | 编辑器 DOM 结构探测（排障首选） |
@@ -38,14 +38,21 @@ description: B站（bilibili）专栏文章自动发布。隔离 Chrome + playwr
 
 ```bash
 # ① 拉起隔离 Chrome（必须后台常驻：run_in_background + sleep 保活）
-node scripts/launch-cdp-chrome.js && sleep 7200
+node ../isolated-browser/scripts/launch.js && sleep 7200
 
-# ② 发布（t.txt 首行=标题；b.txt 一行一段；--image-at 2 = 插到第2段之后）
+# ② 发布（t.txt 首行=标题；b.txt 一行一段；配图默认 3 张，按标签自动挑）
 node scripts/bili_publish_pw.js --title-file t.txt --body-file b.txt \
-     --image <素材目录>/14.jpg --image-at 2 --publish
+     --keyword "婚车租车" --tags "婚庆用车,婚庆婚车车队" --publish
+# 也可手动多张：--image a.jpg --image b.jpg --image c.jpg
+# 封面（必须在发布前设置，发布后无法补设，见 P19）：--cover 自动完成 开关→上传→裁剪弹窗
+node scripts/bili_publish_pw.js --title-file t.txt --body-file b.txt \
+     --image a.jpg --image b.jpg --image c.jpg --cover a.jpg --publish
 
 # ③ 若提示「触发风控验证码」（退出码 2）→ 打开导出的 bili_captcha.png 读字符
 node scripts/bili_publish_pw.js --captcha M5hcD
+
+# ④ 封面复核（权威判据=creationlist API cover.url；公开页 share_info.pic 有延迟勿据此下结论）
+node scripts/bili_publish_pw.js --check-cover <dyn_id>   # 不带 id 则取最近一篇
 ```
 
 查结果：`node scripts/bili_publish_pw.js --status`
@@ -108,7 +115,15 @@ node scripts/bili_publish_pw.js --captcha M5hcD
 
 ---
 
-## 最近一次成功记录
+## 最近成功记录
 
-2026-10-02《婚车租车怎么选？车型、数量、预算一篇讲清楚》
-→ https://www.bilibili.com/opus/1254454729060122661 （dyn_id 1254454729060122661，12:05 发布，配图插在第 2 段之后）
+- **2026-10-13 12:10《陪表弟订婚车跑了两周，这些细节比价格更值得先问清》
+  → https://www.bilibili.com/opus/1258537975963189301 （dyn_id 1258537975963189301，
+  3 图落第 3/5/8 段后 + `--cover` 自定义封面（开关→上传→裁剪弹窗全自动，622×350 图床落位），
+  验证码 `6Tdp7` 一次通过；封面复核工具 `--check-cover` 见 P19 修订版判据）**
+- 2026-10-12 18:27《婚车租车怎么选不踩坑？车型、价格、预订时机一篇讲透》
+  → https://www.bilibili.com/opus/1258264021493088277 （dyn_id 1258264021493088277，
+  3 张配图落第 3/7/10 段后、公开页均为 `bfs/new_dyn` 外链；**风控验证码 `dVGkr` 一次通过**；
+  `--captcha` 后报 vui_dialog 拦截 = 已成功，先跑 `--status` 核实，见 troubleshooting **P18**）
+- 2026-10-02《婚车租车怎么选？车型、数量、预算一篇讲清楚》
+  → https://www.bilibili.com/opus/1254454729060122661 （dyn_id 1254454729060122661，12:05 发布，配图插在第 2 段之后）

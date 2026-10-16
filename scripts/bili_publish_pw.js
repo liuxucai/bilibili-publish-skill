@@ -8,9 +8,17 @@
  *   # 1) 发布（无图）
  *   node scripts/bili_publish_pw.js --title-file t.txt --body-file b.txt --publish
  *
- *   # 2) 发布 + 在第 2 段之后插图
+ *   # 2) 发布 + 配图（默认 3 张，按标签从素材库自动挑）
  *   node scripts/bili_publish_pw.js --title-file t.txt --body-file b.txt \
- *        --image <素材目录>/14.jpg --image-at 2 --publish
+ *        --keyword "婚车租车" --tags "婚庆用车,婚庆婚车车队" --publish
+ *
+ *   # 2b) 手动指定多张配图（可重复 --image）
+ *   node scripts/bili_publish_pw.js --title-file t.txt --body-file b.txt \
+ *        --image <素材目录>/14.jpg --image <素材目录>/11.jpg --image <素材目录>/9.jpg --publish
+ *
+ *   # 2c) 发布 + 自定义封面（必须在发布前设置，发布后无法网页补设，见 P19）
+ *   node scripts/bili_publish_pw.js --title-file t.txt --body-file b.txt \
+ *        --image a.jpg --image b.jpg --image c.jpg --cover a.jpg --publish
  *
  *   # 3) 发布被风控拦下 → 脚本导出验证码图并退出(码2)，人工/Agent 读出后补填
  *   node scripts/bili_publish_pw.js --captcha M5hcD
@@ -26,8 +34,15 @@
  *   --title <s>        标题（与 title-file 二选一）
  *   --body-file <f>    正文文件。默认「一行一段」（空行忽略）；--body-mode blank 改为「空行分段」
  *   --body-mode line|blank
- *   --image <f>        配图路径（本地文件）
- *   --image-at <N>     配图插到「第 N 段之后」（1 基，段落之间）；默认 1
+ *   --image <f>        配图路径（本地文件）；**可重复传多次**指定多张
+ *   --image-at <N>     单张时的插图锚点「第 N 段之后」（1 基）；多张时由布局自动均分
+ *   --keyword <str>    自动挑图关键词（缺省用标题）
+ *   --tags "a,b"       文章标签（取自素材库 tag.txt；缺省按关键词自动推荐）
+ *   --image-top <N>    自动挑选张数（默认 3）
+ *   --image-layout <s> spread（默认，均分）| group（连续插在同一处）
+ *   --no-image         不配图
+ *   --cover <f>        自定义封面图（发布设置「自定义封面」开关 → 添加封面 → 上传；建议 ≥600×336）
+ *   --check-cover <id> 读 opus 公开页分享卡 pic 字段，判定封面是否生效（app_logo = 未生效）
  *   --publish          真正提交发布（缺省=只填内容存草稿）
  *   --no-save          配合缺省模式：只填充+自检，不触发保存草稿
  *   --captcha <code>   补填风控验证码并继续发布
@@ -50,14 +65,28 @@ function arg(name, def) {
   const v = process.argv[i + 1];
   return (v === undefined || v.startsWith('--')) ? true : v;
 }
+/** 收集同一参数的所有取值（供 --image 多张） */
+function argAll(name) {
+  const out = [];
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === '--' + name) {
+      const v = process.argv[i + 1];
+      if (v !== undefined && !v.startsWith('--')) out.push(v);
+    }
+  }
+  return out;
+}
 const A = {
   titleFile: arg('title-file'), title: arg('title'),
   bodyFile: arg('body-file'), bodyMode: arg('body-mode', 'line'),
-  image: arg('image'), imageAt: parseInt(arg('image-at', '1'), 10) || 1,
+  image: argAll('image'), imageAt: parseInt(arg('image-at', '1'), 10) || 1,
   publish: !!arg('publish', false),
   noSave: !!arg('no-save', false),
   captcha: arg('captcha'), outDir: arg('out-dir', process.cwd()),
   status: !!arg('status', false), probe: !!arg('probe', false),
+  keyword: arg('keyword'), tags: arg('tags'), imageTop: arg('image-top'),
+  imageLayout: arg('image-layout'), imageDir: arg('image-dir'), noImage: !!arg('no-image', false),
+  cover: arg('cover'), checkCover: arg('check-cover'),
 };
 if (!fs.existsSync(A.outDir)) fs.mkdirSync(A.outDir, { recursive: true });
 
@@ -164,6 +193,96 @@ async function dumpSeq(ed) {
   }));
   seq.forEach(s => log('   ', s));
   return seq;
+}
+
+/**
+ * 设置自定义封面（P19：发布设置里的 vui_switch 开关，默认关）
+ *   ① 打开「自定义封面」开关 → ② 点「添加封面」→ ③ input[type=file] setInputFiles（无裁剪弹窗）
+ * ⚠️ 必须在点「发布」之前做；已发布的 opus 无法网页补设封面。
+ */
+async function setCover(ed, page, coverPath, outDir) {
+  const item = ed.locator('.form-item').filter({ has: ed.locator('.form-item-label', { hasText: '自定义封面' }) }).first();
+  const sw = item.locator('.vui_switch--switch').first();
+  await sw.scrollIntoViewIfNeeded().catch(() => {});
+  await sleep(400);
+  const isOn = () => sw.evaluate(el => {
+    const inp = el.querySelector('input[type=checkbox]');
+    if (inp) return !!inp.checked;
+    if (el.getAttribute('aria-checked') === 'true') return true;
+    return /(^|\s|-)vui_switch--(checked|active|on)/.test(String(el.className));
+  }).catch(() => null);
+  if (!(await isOn())) { await sw.click({ timeout: 8000 }); await sleep(1200); }
+  log('  ✓ 自定义封面开关状态:', await isOn());
+  await ed.locator('text=添加封面').first().click({ timeout: 8000 }).catch(() => {});
+  await sleep(1200);
+  const fi = ed.locator('input[type=file][accept*=".png"]').last();
+  if (!(await fi.count())) throw new Error('封面 input[type=file] 未出现（「添加封面」未生效）');
+  await fi.setInputFiles(path.resolve(coverPath));
+  log('  ✓ 封面文件已提交:', path.basename(coverPath));
+  // ⚠️ P19「无裁剪弹窗」有误（2026-10-13 复测）：上传后会弹「选择封面的截取位置」裁剪弹窗，
+  //    必须点弹窗内「确定」，否则封面停留在弹窗里不生效
+  let cropDone = false;
+  for (let i = 0; i < 20; i++) {
+    await sleep(1500);
+    const has = await ed.getByText('选择封面的截取位置').first().isVisible().catch(() => false);
+    if (!has) continue;
+    let clicked = false;
+    try { await ed.locator('button:visible').filter({ hasText: /^确定$/ }).last().click({ timeout: 5000 }); clicked = true; }
+    catch (e) {
+      try { await ed.getByText('确定', { exact: true }).last().click({ timeout: 5000 }); clicked = true; }
+      catch (e2) { /* 下一轮重试 */ }
+    }
+    if (clicked) { cropDone = true; log('  ✓ 已点裁剪弹窗「确定」'); break; }
+  }
+  if (!cropDone) log('  ⚠️ 未出现/未关闭裁剪弹窗（请核对 bili_cover.png）');
+  await sleep(2500);
+  // ⚠️ 本页 page.screenshot 会挂起，取证必须用 cdplib.fullScreenshot
+  await lib.fullScreenshot(page, path.join(outDir, 'bili_cover.png')).catch(() => {});
+  return true;
+}
+
+/** 复核封面：权威判据 = creationlist API 的 cover.url（图床图 = 生效；空/app_logo = 未生效）。
+ *  ⚠️ 公开页 __INITIAL_STATE__ 的 share_info.pic 有延迟（刚发布时兜底 app_logo，勿据此下结论）。 */
+async function checkCoverPic(page, dynId) {
+  // ① 权威：创作中心 API
+  const f = page.frames().find(x => x.url().indexOf('bilibili.com') >= 0);
+  if (f) {
+    const item = await f.evaluate(async (id) => {
+      const r = await fetch('https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/creationlist?ps=10&pn=1&classification_type=0&creation_type=0', { credentials: 'include' });
+      const j = await r.json();
+      return ((j.data && j.data.items) || []).find(x => String(x.dyn_id) === String(id)) || null;
+    }, dynId).catch(() => null);
+    if (item) {
+      const c = item.cover || {};
+      const ok = c.url && !/app_logo/.test(c.url);
+      log('封面复核（creationlist API）:', JSON.stringify({ url: c.url, w: c.width, h: c.height }));
+      log(ok ? '  ✅ 封面已生效（图床 cover.url 存在）' : '  ❌ 封面未生效（cover 为空/app_logo）');
+      return ok;
+    }
+  }
+  // ② 兜底：公开页 pic 字段（可能有延迟，仅作参考）
+  await page.goto('https://www.bilibili.com/opus/' + dynId, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+  await sleep(5000);
+  const info = await page.evaluate(() => {
+    const out = { pics: [] };
+    try {
+      const walk = (o, p, d) => {
+        if (!o || typeof o !== 'object' || d > 7 || out.pics.length > 20) return;
+        for (const k of Object.keys(o)) {
+          const v = o[k];
+          if (k === 'pic' && typeof v === 'string') out.pics.push({ path: p + '.' + k, v: v.slice(0, 110) });
+          else if (v && typeof v === 'object') walk(v, p + '.' + k, d + 1);
+        }
+      };
+      walk(window.__INITIAL_STATE__, '$', 0);
+    } catch (e) { out.err = e.message; }
+    return out;
+  }).catch(e => ({ pics: [], err: e.message }));
+  const pics = info.pics || [];
+  const real = pics.filter(x => !/app_logo/.test(x.v));
+  pics.forEach(x => log('  ', x.path, '=', x.v));
+  log(real.length ? '  ✅ 公开页 pic 非兜底值（封面生效）' : '  ⚠️ 公开页 pic 为 app_logo（可能延迟，以 creationlist cover.url 为准）');
+  return real.length > 0;
 }
 
 /** 抓一次草稿序列化，确认图片已换成图床 URL */
@@ -281,6 +400,14 @@ async function probe(ed) {
 (async () => {
   const { browser, page } = await lib.connect();
   try {
+    // 模式：封面复核（--check-cover <dyn_id> 或 --check-cover 取最近一篇）
+    if (A.checkCover) {
+      let dynId = typeof A.checkCover === 'string' ? A.checkCover : null;
+      if (!dynId) { const s = await status(page); dynId = s && s.dyn_id; }
+      if (!dynId) { log('未取得 dyn_id，无法校验封面'); return; }
+      await checkCoverPic(page, dynId);
+      return;
+    }
     // 模式：查状态
     if (A.status) {
       if (page.url().indexOf('bilibili.com') < 0) await page.goto(lib.MANAGER_URL, { waitUntil: 'domcontentloaded' });
@@ -313,14 +440,36 @@ async function probe(ed) {
     log('[2/6] 填标题...'); await fillTitle(ed, title);
     log('[3/6] 注入正文...'); await fillBody(ed, paras);
 
-    if (typeof A.image === 'string') {
-      log('[4/6] 插图（第', A.imageAt, '段之后）...');
-      await putCursorAtEnd(ed, A.imageAt);
-      await insertImage(ed, A.image);
+    // 配图：显式 --image（可重复）优先；否则按「标签 → 素材库」自动挑 Top-N（默认 3 张）
+    const { planImages } = require(path.resolve(__dirname, '..', '..', 'isolated-browser', 'scripts', 'post_images.js'));
+    const plan = planImages({
+      explicit: A.image, noImage: A.noImage, keyword: A.keyword || title, tags: A.tags,
+      top: A.imageTop, layout: A.imageLayout, at: A.imageAt, dir: A.imageDir, paraCount: paras.length,
+    });
+    const IMAGES = plan.images;
+    log('[配图] ' + IMAGES.length + ' 张（来源 ' + plan.source + ' | 锚点[' + (plan.slots.join(',') || '-') + ']）');
+    if (plan.detail) plan.detail.chosen.forEach((c, i) => log('  ' + (i + 1) + ') 图' + c.number + ' ' + (c.name || '') + ' → ' + c.image));
+
+    if (IMAGES.length) {
+      log('[4/6] 插图（' + IMAGES.length + ' 张）...');
+      // 倒序插入：每次插图都会新增块，倒序可保证尚未处理的锚点索引不漂移
+      const order = IMAGES.map((img, i) => ({ img, at: plan.slots[i] || A.imageAt, i })).sort((a, b) => b.at - a.at);
+      for (const it of order) {
+        await putCursorAtEnd(ed, it.at);
+        await insertImage(ed, it.img);
+        log('  ✓ 图' + (it.i + 1) + ' 已插入（第 ' + it.at + ' 段后）');
+      }
     } else log('[4/6] 无配图，跳过');
 
     log('[5/6] 校验块结构...');
     await dumpSeq(ed);
+
+    // 自定义封面：必须在发布前设置（发布后无法网页补设，见 P19）
+    if (A.cover) {
+      if (!fs.existsSync(A.cover)) throw new Error('封面文件不存在: ' + A.cover);
+      log('[5.5] 设置自定义封面: ' + path.basename(A.cover));
+      await setCover(ed, page, A.cover, A.outDir);
+    }
 
     if (A.noSave) {
       log('=== 自检完成（--no-save，未触发保存）===');
@@ -329,7 +478,7 @@ async function probe(ed) {
 
     const draft = await waitDraftWithImage(page);
     if (draft) log('  ✓ 草稿序列化：图床URL=' + draft.hasRemote + ' / base64残留=' + draft.dataImgs);
-    if (typeof A.image === 'string' && draft && !draft.hasRemote) log('  ⚠️ 警告：草稿里图片仍是 base64，发布后可能失效');
+    if (IMAGES.length && draft && !draft.hasRemote) log('  ⚠️ 警告：草稿里图片仍是 base64，发布后可能失效');
 
     if (!A.publish) {
       log('=== 已保存草稿（未发布）。加 --publish 才会提交 ===');
@@ -351,6 +500,7 @@ async function probe(ed) {
     log('=== 发布成功 ===', r.url || r.msg);
     const s = await status(page);
     if (s) log('文章链接:', s.url);
+    if (s && s.dyn_id) { log('--- 封面复核（分享卡 pic 字段）---'); await checkCoverPic(page, s.dyn_id); }
   } finally {
     await browser.close().catch(() => {});
   }
